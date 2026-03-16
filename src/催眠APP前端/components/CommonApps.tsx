@@ -1203,35 +1203,26 @@ ${behaviorTxt}
 `;
 
     try {
-      // 1) 在变量中新增 stat_data.角色.<角色名>（同步方式，兼容性更好）
-      updateVariablesWith(vars => {
-        const stat = (vars.stat_data ?? {}) as Record<string, any>;
-        const roles = (stat.角色 ?? {}) as Record<string, any>;
-        if (!roles[roleName]) {
-          roles[roleName] = {
-            好感度: 0,
-            警戒度: 0,
-            服从度: 0,
-            性欲: 0,
-            快感值: 0,
-            阴蒂敏感度: 100,
-            小穴敏感度: 100,
-            菊穴敏感度: 100,
-            尿道敏感度: 100,
-            乳头敏感度: 100,
-            临时催眠效果: {},
-            永久催眠效果: {},
-            阴蒂高潮次数: 0,
-            小穴高潮次数: 0,
-            菊穴高潮次数: 0,
-            尿道高潮次数: 0,
-            乳头高潮次数: 0,
-          };
-        }
-        stat.角色 = roles;
-        vars.stat_data = stat;
-        return vars;
-      }, { type: 'chat' });
+      // 1) 在 MVU stat_data.角色 中新增 / 更新该角色
+      await MvuBridge.createOrUpdateRole(roleName, {
+        好感度: 0,
+        警戒度: 0,
+        服从度: 0,
+        性欲: 0,
+        快感值: 0,
+        阴蒂敏感度: 100,
+        小穴敏感度: 100,
+        菊穴敏感度: 100,
+        尿道敏感度: 100,
+        乳头敏感度: 100,
+        临时催眠效果: {},
+        永久催眠效果: {},
+        阴蒂高潮次数: 0,
+        小穴高潮次数: 0,
+        菊穴高潮次数: 0,
+        尿道高潮次数: 0,
+        乳头高潮次数: 0,
+      });
 
       // 2) 在当前聊天绑定的「催眠APP」世界书中写入变量条目 + 人设条目
       // 兼容：如果同名世界书已存在, getOrCreateChatWorldbook 可能抛出"已存在"错误, 则退回使用已有绑定或直接使用该名称
