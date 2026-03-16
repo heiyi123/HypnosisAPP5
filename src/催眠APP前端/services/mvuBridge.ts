@@ -164,10 +164,7 @@ export const MvuBridge = {
     });
   },
 
-  setTask: async (
-    taskName: string,
-    payload: { 完成条件: string; 已完成: boolean; 名称?: string; 奖励PT?: number },
-  ) => {
+  setTask: async (taskName: string, payload: { 完成条件: string; 已完成: boolean; 名称?: string; 奖励PT?: number }) => {
     return enqueueMvuWrite(async () => {
       const data = await getMvuData();
       if (!data) return false;

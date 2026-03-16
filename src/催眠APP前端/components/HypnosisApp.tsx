@@ -488,7 +488,9 @@ export const HypnosisApp: React.FC<HypnosisAppProps> = ({ userData, onUpdateUser
         setSubscription(nextSub as any);
         if (auto.renewed && nextSub?.tier) {
           const price = SUBSCRIPTION_PRICES[nextSub.tier] ?? 0;
-          void MvuBridge.appendThisTurnAppOperationLog(`自动续订 VIP${nextSub.tier.slice(3)}（-¥${price.toLocaleString()}）`);
+          void MvuBridge.appendThisTurnAppOperationLog(
+            `自动续订 VIP${nextSub.tier.slice(3)}（-¥${price.toLocaleString()}）`,
+          );
         }
       } catch (err) {
         console.warn('[HypnoOS] 订阅/时间同步失败', err);
@@ -526,16 +528,14 @@ export const HypnosisApp: React.FC<HypnosisAppProps> = ({ userData, onUpdateUser
 
   const getFeatureNumericConfig = (
     feature: HypnosisFeature,
-  ):
-    | {
-        label: string;
-        unit: string;
-        min: number;
-        max: number;
-        step?: number;
-        hint?: string;
-      }
-    | null => {
+  ): {
+    label: string;
+    unit: string;
+    min: number;
+    max: number;
+    step?: number;
+    hint?: string;
+  } | null => {
     switch (feature.id) {
       case 'vip1_temp_sensitivity':
         return { label: '敏感度增加', unit: '点', min: 1, max: 999, step: 1, hint: '每点2MC能量' };
@@ -762,7 +762,10 @@ export const HypnosisApp: React.FC<HypnosisAppProps> = ({ userData, onUpdateUser
           : f,
       ),
     );
-    void DataService.updateFeature(id, { isEnabled: nextEnabled, ...(nextNumber === null ? null : { userNumber: nextNumber }) });
+    void DataService.updateFeature(id, {
+      isEnabled: nextEnabled,
+      ...(nextNumber === null ? null : { userNumber: nextNumber }),
+    });
   };
 
   const updateFeatureNote = (id: string, note: string) => {
@@ -1340,8 +1343,10 @@ export const HypnosisApp: React.FC<HypnosisAppProps> = ({ userData, onUpdateUser
                       {Math.max(0, userData.mcEnergyMax - Math.floor(userData.mcEnergy)) <= 0
                         ? '已满'
                         : `¥${(
-                            Math.min(Math.max(0, userData.mcEnergyMax - Math.floor(userData.mcEnergy)), quickSupplyQty) *
-                            100
+                            Math.min(
+                              Math.max(0, userData.mcEnergyMax - Math.floor(userData.mcEnergy)),
+                              quickSupplyQty,
+                            ) * 100
                           ).toLocaleString()}`}
                     </span>
                   </div>

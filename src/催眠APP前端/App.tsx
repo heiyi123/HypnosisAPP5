@@ -197,11 +197,7 @@ const App = () => {
         );
       case AppMode.PUBLISH_TASK:
         return (
-          <PublishTaskApp
-            userData={userData}
-            onUpdateUser={updateUser}
-            onBack={() => setCurrentApp(AppMode.HOME)}
-          />
+          <PublishTaskApp userData={userData} onUpdateUser={updateUser} onBack={() => setCurrentApp(AppMode.HOME)} />
         );
       case AppMode.ROLE_ENTRY:
         return <RoleEntryApp onBack={() => setCurrentApp(AppMode.HOME)} />;

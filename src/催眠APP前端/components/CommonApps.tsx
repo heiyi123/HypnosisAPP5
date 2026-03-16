@@ -443,9 +443,9 @@ const StatRow: React.FC<{ label: string; value: unknown }> = ({ label, value }) 
         ? 'from-emerald-400 to-cyan-400'
         : label === '好感度'
           ? 'from-pink-400 to-rose-400'
-        : label === '性欲'
-          ? 'from-fuchsia-400 to-cyan-400'
-          : 'from-cyan-400 to-violet-400';
+          : label === '性欲'
+            ? 'from-fuchsia-400 to-cyan-400'
+            : 'from-cyan-400 to-violet-400';
 
   return (
     <div className="p-3 rounded-xl border border-white/10 bg-black/20">
@@ -1433,7 +1433,8 @@ export const PublishTaskApp = ({
     return Math.min(9999, n);
   })();
   const costMoney = reward * 800;
-  const canSubmit = title.trim() !== '' && content.trim() !== '' && reward > 0 && userData.money >= costMoney && !submitting;
+  const canSubmit =
+    title.trim() !== '' && content.trim() !== '' && reward > 0 && userData.money >= costMoney && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
