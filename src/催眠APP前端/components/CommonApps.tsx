@@ -1203,8 +1203,8 @@ ${behaviorTxt}
 `;
 
     try {
-      // 1) 在变量中新增 stat_data.角色.<角色名>
-      await updateVariablesWith(async vars => {
+      // 1) 在变量中新增 stat_data.角色.<角色名>（同步方式，兼容性更好）
+      updateVariablesWith(vars => {
         const stat = (vars.stat_data ?? {}) as Record<string, any>;
         const roles = (stat.角色 ?? {}) as Record<string, any>;
         if (!roles[roleName]) {
@@ -1234,7 +1234,18 @@ ${behaviorTxt}
       }, { type: 'chat' });
 
       // 2) 在当前聊天绑定的「催眠APP」世界书中写入变量条目 + 人设条目
-      const wbName = await getOrCreateChatWorldbook('current', '催眠APP');
+      // 兼容：如果同名世界书已存在, getOrCreateChatWorldbook 可能抛出"已存在"错误, 则退回使用已有绑定或直接使用该名称
+      let wbName: string = '催眠APP';
+      try {
+        wbName = await getOrCreateChatWorldbook('current', '催眠APP');
+      } catch {
+        try {
+          const bound = getChatWorldbookName('current');
+          wbName = bound || '催眠APP';
+        } catch {
+          wbName = '催眠APP';
+        }
+      }
 
       const contentVariable = `${roleName}:
   {{format_message_variable::stat_data.角色.${roleName}}}`;
@@ -1308,9 +1319,7 @@ ${behaviorTxt}
       setNotice('写入失败，请检查酒馆环境与世界书配置');
     } finally {
       setSaving(false);
-      if (notice) {
-        window.setTimeout(() => setNotice(null), 2500);
-      }
+      window.setTimeout(() => setNotice(null), 2500);
     }
   };
 
