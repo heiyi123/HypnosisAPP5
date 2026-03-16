@@ -164,12 +164,29 @@ export const MvuBridge = {
     });
   },
 
-  setTask: async (taskName: string, payload: { 完成条件: string; 已完成: boolean }) => {
+  setTask: async (
+    taskName: string,
+    payload: { 完成条件: string; 已完成: boolean; 名称?: string; 奖励PT?: number },
+  ) => {
     return enqueueMvuWrite(async () => {
       const data = await getMvuData();
       if (!data) return false;
       const { mvu, option } = data;
       const path = `任务.${taskName}`;
+      const prev = _.get(mvu.stat_data, path);
+      if (_.isEqual(prev, payload)) return false;
+      _.set(mvu.stat_data, path, payload);
+      await Mvu.replaceMvuData(mvu, option);
+      return true;
+    });
+  },
+
+  createOrUpdateRole: async (roleName: string, payload: Record<string, any>) => {
+    return enqueueMvuWrite(async () => {
+      const data = await getMvuData();
+      if (!data) return false;
+      const { mvu, option } = data;
+      const path = `角色.${roleName}`;
       const prev = _.get(mvu.stat_data, path);
       if (_.isEqual(prev, payload)) return false;
       _.set(mvu.stat_data, path, payload);

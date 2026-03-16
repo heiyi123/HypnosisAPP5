@@ -18,13 +18,13 @@ import type { UserResources } from '../types';
 import { MvuBridge, waitForMvuReady } from '../services/mvuBridge';
 
 // Wrapper for standard pages
-const PageLayout = ({ title, children, onBack, color = 'bg-gray-100' }: any) => (
-  <div className={`h-full flex flex-col ${color} overflow-hidden animate-fade-in`}>
-    <div className="px-4 py-4 flex items-center gap-3 bg-white/50 backdrop-blur-md shadow-sm z-10">
-      <button onClick={onBack} className="p-1 rounded-full hover:bg-black/5">
-        <ArrowLeft className="text-gray-800" />
+const PageLayout = ({ title, children, onBack, color = 'bg-slate-900' }: any) => (
+  <div className={`h-full flex flex-col ${color} overflow-hidden animate-fade-in text-white`}>
+    <div className="px-4 py-4 pt-6 flex items-center gap-3 bg-black/50 backdrop-blur-md border-b border-white/10 z-10">
+      <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10 transition-colors">
+        <ArrowLeft className="text-white/80" />
       </button>
-      <h1 className="text-lg font-bold text-gray-800">{title}</h1>
+      <h1 className="text-lg font-bold text-white">{title}</h1>
     </div>
     <div className="flex-1 overflow-auto p-4">{children}</div>
   </div>
@@ -1099,60 +1099,17 @@ export const RoleEntryApp = ({ onBack }: { onBack: () => void }) => {
   const [guardGuides, setGuardGuides] = useState<string[]>(['', '', '', '', '']);
   const [likeGuides, setLikeGuides] = useState<string[]>(['', '', '', '', '']);
   const [obeyGuides, setObeyGuides] = useState<string[]>(['', '', '', '', '']);
-  const [generated, setGenerated] = useState<{
-    varTemplate: string;
-    worldbookEntry: string;
-    personaTxt: string;
-  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const safeName = name.trim();
   const canGenerate = safeName !== '' && persona.trim() !== '';
 
-  const buildTemplates = () => {
-    if (!canGenerate) return;
+  const applyRole = async () => {
+    if (!canGenerate || saving) return;
+    setSaving(true);
+    setNotice(null);
     const roleName = safeName;
-
-    const varTemplate = `${roleName}:
-  好感度: 0
-  警戒度: 0
-  服从度: 0
-  性欲: 0
-  快感值: 0
-  阴蒂敏感度: 100
-  小穴敏感度: 100
-  菊穴敏感度: 100
-  尿道敏感度: 100
-  乳头敏感度: 100
-  临时催眠效果: {}
-  永久催眠效果: {}
-  阴蒂高潮次数: 0
-  小穴高潮次数: 0
-  菊穴高潮次数: 0
-  尿道高潮次数: 0
-  乳头高潮次数: 0
-`;
-
-    const worldbookEntry = `- 名称: "[mvu_update]${roleName}变量"
-  启用: true
-  激活策略:
-    类型: 绿灯
-    关键字:
-      - ${roleName}
-  插入位置:
-    类型: 角色定义之前
-    顺序: 26
-  激活概率: 100
-  递归:
-    不可被其他条目激活: true
-    不可激活其他条目: true
-  内容: |2
-      ${roleName}:
-        {{format_message_variable::stat_data.角色.${roleName}}}
-`;
-
-    const personaBlock = `<${roleName}人设>
-${persona.trim()}
-</${roleName}人设>`;
 
     const pad = (lines: string) =>
       lines
@@ -1163,6 +1120,10 @@ ${persona.trim()}
     const g = guardGuides.map(s => s.trim());
     const l = likeGuides.map(s => s.trim());
     const o = obeyGuides.map(s => s.trim());
+
+    const personaBlock = `<${roleName}人设>
+${persona.trim()}
+</${roleName}人设>`;
 
     const behaviorTxt = `<${roleName}行为指导>
 ${roleName}现在的性欲:
@@ -1241,7 +1202,116 @@ rule:
 ${behaviorTxt}
 `;
 
-    setGenerated({ varTemplate, worldbookEntry, personaTxt });
+    try {
+      // 1) 在变量中新增 stat_data.角色.<角色名>
+      await updateVariablesWith(async vars => {
+        const stat = (vars.stat_data ?? {}) as Record<string, any>;
+        const roles = (stat.角色 ?? {}) as Record<string, any>;
+        if (!roles[roleName]) {
+          roles[roleName] = {
+            好感度: 0,
+            警戒度: 0,
+            服从度: 0,
+            性欲: 0,
+            快感值: 0,
+            阴蒂敏感度: 100,
+            小穴敏感度: 100,
+            菊穴敏感度: 100,
+            尿道敏感度: 100,
+            乳头敏感度: 100,
+            临时催眠效果: {},
+            永久催眠效果: {},
+            阴蒂高潮次数: 0,
+            小穴高潮次数: 0,
+            菊穴高潮次数: 0,
+            尿道高潮次数: 0,
+            乳头高潮次数: 0,
+          };
+        }
+        stat.角色 = roles;
+        vars.stat_data = stat;
+        return vars;
+      }, { type: 'chat' });
+
+      // 2) 在当前聊天绑定的「催眠APP」世界书中写入变量条目 + 人设条目
+      const wbName = await getOrCreateChatWorldbook('current', '催眠APP');
+
+      const contentVariable = `${roleName}:
+  {{format_message_variable::stat_data.角色.${roleName}}}`;
+
+      await createWorldbookEntries(
+        wbName,
+        [
+          {
+            name: `[mvu_update]${roleName}变量`,
+            enabled: true,
+            strategy: {
+              type: 'selective',
+              keys: [roleName],
+              keys_secondary: { logic: 'and_any', keys: [] },
+              scan_depth: 'same_as_global',
+            },
+            position: {
+              type: 'before_character_definition',
+              role: 'system',
+              depth: 1,
+              order: 30,
+            },
+            content: contentVariable,
+            probability: 100,
+            recursion: {
+              prevent_incoming: true,
+              prevent_outgoing: true,
+              delay_until: null,
+            },
+            effect: {
+              sticky: null,
+              cooldown: null,
+              delay: null,
+            },
+          },
+          {
+            name: `[mvu_plot]${roleName}人设`,
+            enabled: true,
+            strategy: {
+              type: 'selective',
+              keys: [roleName],
+              keys_secondary: { logic: 'and_any', keys: [] },
+              scan_depth: 'same_as_global',
+            },
+            position: {
+              type: 'before_character_definition',
+              role: 'system',
+              depth: 1,
+              order: 80,
+            },
+            content: personaTxt,
+            probability: 100,
+            recursion: {
+              prevent_incoming: true,
+              prevent_outgoing: true,
+              delay_until: null,
+            },
+            effect: {
+              sticky: null,
+              cooldown: null,
+              delay: null,
+            },
+          },
+        ],
+        { render: 'debounced' },
+      );
+
+      setNotice('已写入：变量 + 世界书条目');
+    } catch (err) {
+      console.warn('[HypnoOS] 角色录入写入变量/世界书失败', err);
+      setNotice('写入失败，请检查酒馆环境与世界书配置');
+    } finally {
+      setSaving(false);
+      if (notice) {
+        window.setTimeout(() => setNotice(null), 2500);
+      }
+    }
   };
 
   return (
@@ -1265,95 +1335,79 @@ ${behaviorTxt}
           />
         </div>
         <div className="space-y-1">
-          <div>警戒度行为指导（5 段，对应五个区间）</div>
-          {[0, 1, 2, 3, 4].map(i => (
-            <textarea
-              key={i}
-              rows={2}
-              value={guardGuides[i] ?? ''}
-              onChange={e => {
-                const next = [...guardGuides];
-                next[i] = e.target.value;
-                setGuardGuides(next);
-              }}
-              className="w-full rounded border border-gray-300 px-2 py-1 resize-none mt-1"
-            />
-          ))}
+          <div>警戒度行为指导（5 段，对应五个数值区间）</div>
+          {[0, 1, 2, 3, 4].map(i => {
+            const labels = ['0–19', '20–39', '40–59', '60–79', '80–100'];
+            return (
+              <div key={i} className="space-y-0.5 mt-1">
+                <div className="text-xs text-gray-500">区间 {labels[i]}</div>
+                <textarea
+                  rows={2}
+                  value={guardGuides[i] ?? ''}
+                  onChange={e => {
+                    const next = [...guardGuides];
+                    next[i] = e.target.value;
+                    setGuardGuides(next);
+                  }}
+                  className="w-full rounded border border-gray-300 px-2 py-1 resize-none"
+                />
+              </div>
+            );
+          })}
         </div>
         <div className="space-y-1">
-          <div>好感度行为指导（5 段）</div>
-          {[0, 1, 2, 3, 4].map(i => (
-            <textarea
-              key={i}
-              rows={2}
-              value={likeGuides[i] ?? ''}
-              onChange={e => {
-                const next = [...likeGuides];
-                next[i] = e.target.value;
-                setLikeGuides(next);
-              }}
-              className="w-full rounded border border-gray-300 px-2 py-1 resize-none mt-1"
-            />
-          ))}
+          <div>好感度行为指导（5 段，对应五个数值区间）</div>
+          {[0, 1, 2, 3, 4].map(i => {
+            const labels = ['0–19', '20–39', '40–59', '60–79', '80–100'];
+            return (
+              <div key={i} className="space-y-0.5 mt-1">
+                <div className="text-xs text-gray-500">区间 {labels[i]}</div>
+                <textarea
+                  rows={2}
+                  value={likeGuides[i] ?? ''}
+                  onChange={e => {
+                    const next = [...likeGuides];
+                    next[i] = e.target.value;
+                    setLikeGuides(next);
+                  }}
+                  className="w-full rounded border border-gray-300 px-2 py-1 resize-none"
+                />
+              </div>
+            );
+          })}
         </div>
         <div className="space-y-1">
-          <div>服从度行为指导（5 段）</div>
-          {[0, 1, 2, 3, 4].map(i => (
-            <textarea
-              key={i}
-              rows={2}
-              value={obeyGuides[i] ?? ''}
-              onChange={e => {
-                const next = [...obeyGuides];
-                next[i] = e.target.value;
-                setObeyGuides(next);
-              }}
-              className="w-full rounded border border-gray-300 px-2 py-1 resize-none mt-1"
-            />
-          ))}
+          <div>服从度行为指导（5 段，对应五个数值区间）</div>
+          {[0, 1, 2, 3, 4].map(i => {
+            const labels = ['0–19', '20–39', '40–59', '60–79', '80–100'];
+            return (
+              <div key={i} className="space-y-0.5 mt-1">
+                <div className="text-xs text-gray-500">区间 {labels[i]}</div>
+                <textarea
+                  rows={2}
+                  value={obeyGuides[i] ?? ''}
+                  onChange={e => {
+                    const next = [...obeyGuides];
+                    next[i] = e.target.value;
+                    setObeyGuides(next);
+                  }}
+                  className="w-full rounded border border-gray-300 px-2 py-1 resize-none"
+                />
+              </div>
+            );
+          })}
         </div>
         <button
           type="button"
-          onClick={buildTemplates}
-          disabled={!canGenerate}
+          onClick={() => void applyRole()}
+          disabled={!canGenerate || saving}
           className={`w-full py-2 rounded text-sm font-semibold ${
-            canGenerate ? 'bg-black text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            canGenerate && !saving ? 'bg-black text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
           }`}
         >
-          生成模板
+          {saving ? '确认录入中…' : '确认录入'}
         </button>
-
-        {generated && (
-          <div className="space-y-3 mt-2">
-            <div className="space-y-1">
-              <div>角色变量模板（initvar）</div>
-              <textarea
-                readOnly
-                rows={8}
-                value={generated.varTemplate}
-                className="w-full rounded border border-gray-300 px-2 py-1 font-mono text-xs resize-none"
-              />
-            </div>
-            <div className="space-y-1">
-              <div>世界书变量条目（催眠APP.yaml）</div>
-              <textarea
-                readOnly
-                rows={10}
-                value={generated.worldbookEntry}
-                className="w-full rounded border border-gray-300 px-2 py-1 font-mono text-xs resize-none"
-              />
-            </div>
-            <div className="space-y-1">
-              <div>人设与行为指导 txt</div>
-              <textarea
-                readOnly
-                rows={20}
-                value={generated.personaTxt}
-                className="w-full rounded border border-gray-300 px-2 py-1 font-mono text-xs resize-none"
-              />
-            </div>
-          </div>
-        )}
+        {notice && <div className="mt-2 text-xs text-gray-600">{notice}</div>}
       </div>
     </PageLayout>
   );

@@ -452,6 +452,14 @@ type PersistedStore = {
   purchases: Record<string, boolean>;
   achievements: Record<string, boolean>;
   quests: Record<string, QuestStatus>;
+  customQuests?: Record<
+    string,
+    {
+      title: string;
+      description: string;
+      rewardMcPoints: number;
+    }
+  >;
 };
 
 const STORE_SCHEMA: z.ZodType<PersistedStore> = z
@@ -484,6 +492,16 @@ const STORE_SCHEMA: z.ZodType<PersistedStore> = z
     purchases: z.record(z.string(), z.coerce.boolean()).default({}),
     achievements: z.record(z.string(), z.boolean()).default({}),
     quests: z.record(z.string(), z.enum(['AVAILABLE', 'ACTIVE', 'COMPLETED', 'CLAIMED'])).default({}),
+    customQuests: z
+      .record(
+        z.string(),
+        z.object({
+          title: z.string(),
+          description: z.string(),
+          rewardMcPoints: z.coerce.number(),
+        }),
+      )
+      .default({}),
   })
   .default({
     version: 1,
@@ -494,6 +512,7 @@ const STORE_SCHEMA: z.ZodType<PersistedStore> = z
     purchases: {},
     achievements: {},
     quests: {},
+    customQuests: {},
   });
 
 function toFiniteNumber(value: unknown): number | null {
@@ -1179,8 +1198,85 @@ export const DataService = {
       };
     });
 
+    // Inject custom quests from MVU 任务变量中未在 QUEST_DATABASE 出现的条目
+    const knownTaskNames = new Set(QUEST_DATABASE.map(q => q.name));
+    const customQuests: Quest[] = [];
+    const seenCustomIds = new Set<string>();
+
+    // 1) 仍存在于 MVU 任务变量中的自定义任务
+    for (const [taskName, rawState] of Object.entries(tasks as Record<string, any>)) {
+      if (knownTaskNames.has(taskName)) continue;
+      if (!rawState || typeof rawState !== 'object') continue;
+      const state = rawState as Record<string, any>;
+      const questId = `custom::${taskName}`;
+
+      // 优先使用持久化元数据（发布时保存），否则退回到 MVU 里的字段
+      const meta = store.customQuests?.[questId];
+      const title =
+        meta?.title ??
+        (typeof state.名称 === 'string' && state.名称.trim() ? String(state.名称).trim() : String(taskName));
+      const description =
+        meta?.description ??
+        (typeof state.完成条件 === 'string' && state.完成条件.trim() ? String(state.完成条件).trim() : '自定义任务');
+      const reward =
+        meta?.rewardMcPoints ??
+        (() => {
+          const r = toFiniteNumber(state.奖励PT);
+          return r === null ? 0 : r;
+        })();
+
+      const completed = state.已完成 === true;
+      const active = typeof state.已完成 === 'boolean';
+      const persistedStatus: QuestStatus | undefined = store.quests?.[questId];
+      let status: QuestStatus;
+      if (persistedStatus === 'CLAIMED') {
+        status = 'CLAIMED';
+      } else if (completed) {
+        status = 'COMPLETED';
+      } else if (persistedStatus === 'ACTIVE' && active) {
+        status = 'ACTIVE';
+      } else {
+        // 未接取：在列表中显示为“可接取”
+        status = 'AVAILABLE';
+      }
+      customQuests.push({
+        id: questId,
+        title,
+        description,
+        rewardMcPoints: reward,
+        status,
+      });
+      seenCustomIds.add(questId);
+    }
+
+    // 2) 只存在于本地 store（MVU 中已经删除）的已完成自定义任务
+    for (const [questId, meta] of Object.entries(store.customQuests ?? {})) {
+      if (!questId.startsWith('custom::')) continue;
+      if (seenCustomIds.has(questId)) continue;
+      const persistedStatus: QuestStatus | undefined = store.quests?.[questId];
+      if (persistedStatus !== 'CLAIMED') continue;
+      customQuests.push({
+        id: questId,
+        title: meta.title,
+        description: meta.description,
+        rewardMcPoints: meta.rewardMcPoints,
+        status: 'CLAIMED',
+      });
+      seenCustomIds.add(questId);
+    }
+
+    // 自定义任务放在最前面
+    quests.unshift(...customQuests);
+
     const order: Record<QuestStatus, number> = { COMPLETED: 0, ACTIVE: 1, AVAILABLE: 2, CLAIMED: 3 };
-    quests.sort((a, b) => order[a.status] - order[b.status]);
+    quests.sort((a, b) => {
+      const diff = order[a.status] - order[b.status];
+      if (diff !== 0) return diff;
+      const aCustom = a.id.startsWith('custom::');
+      const bCustom = b.id.startsWith('custom::');
+      if (aCustom !== bCustom) return aCustom ? -1 : 1;
+      return 0;
+    });
     return quests;
   },
 
@@ -1202,6 +1298,43 @@ export const DataService = {
   },
 
   acceptQuest: async (id: string): Promise<{ success: boolean; message?: string }> => {
+    // --- Custom Quest: mark as ACTIVE based on MVU task key ---
+    if (id.startsWith('custom::')) {
+      const taskKey = id.slice('custom::'.length);
+      if (!taskKey) return { success: false, message: '未知任务' };
+
+      const { store } = normalizeChatVariables(getVariables(CHAT_OPTION));
+      if (store.quests?.[id] === 'CLAIMED') return { success: false, message: '该任务已完成并锁定' };
+
+      const tasks = await MvuBridge.getTasks();
+      if (!tasks) return { success: false, message: 'MVU 未就绪，无法接取任务' };
+      const rawState = (tasks as any)[taskKey];
+      if (!rawState || typeof rawState !== 'object') return { success: false, message: '任务数据不存在' };
+      const state = rawState as Record<string, any>;
+
+      if (state.已完成 === true) return { success: false, message: '任务已完成，请直接提交' };
+      const alreadyActive = typeof state.已完成 === 'boolean';
+      if (alreadyActive) return { success: false, message: '该任务已在进行中' };
+
+      const activeTaskNames = Object.entries(tasks).filter(
+        ([, v]) => v && typeof v === 'object' && typeof (v as any).已完成 === 'boolean',
+      );
+      if (activeTaskNames.length >= 3) return { success: false, message: '同时最多只能接取3个任务' };
+
+      try {
+        await MvuBridge.setTask(taskKey, { ...state, 已完成: false });
+        await updateStoreWith(s => ({
+          ...s,
+          quests: { ...s.quests, [id]: 'ACTIVE' },
+        }));
+        return { success: true };
+      } catch (err) {
+        console.warn('[HypnoOS] 接取自定义任务失败', err);
+        return { success: false, message: '接取失败：写入 MVU 出错' };
+      }
+    }
+
+    // --- Built-in Quest: original behavior ---
     const def = QUEST_DATABASE.find(q => q.id === id);
     if (!def) return { success: false, message: '未知任务' };
     if (def.name.includes('.')) return { success: false, message: '任务名不能包含“.”' };
@@ -1232,6 +1365,27 @@ export const DataService = {
   },
 
   cancelQuest: async (id: string): Promise<{ success: boolean; message?: string }> => {
+    // --- Custom Quest: cancel by MVU task key ---
+    if (id.startsWith('custom::')) {
+      const taskKey = id.slice('custom::'.length);
+      if (!taskKey) return { success: false, message: '未知任务' };
+
+      const tasks = await MvuBridge.getTasks();
+      if (!tasks) return { success: false, message: 'MVU 未就绪，无法取消任务' };
+      if (!(taskKey in (tasks as any))) return { success: false, message: '该任务未在进行中' };
+
+      try {
+        await MvuBridge.deleteTask(taskKey);
+        const after = await MvuBridge.getTasks();
+        if (after && taskKey in after) return { success: false, message: '取消失败：任务未从 MVU 删除' };
+        return { success: true };
+      } catch (err) {
+        console.warn('[HypnoOS] 取消自定义任务失败', err);
+        return { success: false, message: '取消失败：写入 MVU 出错' };
+      }
+    }
+
+    // --- Built-in Quest: use QUEST_DATABASE definition ---
     const def = QUEST_DATABASE.find(q => q.id === id);
     if (!def) return { success: false, message: '未知任务' };
     if (def.name.includes('.')) return { success: false, message: '任务名不能包含“.”' };
@@ -1256,6 +1410,39 @@ export const DataService = {
   },
 
   claimQuest: async (id: string, currentPoints: number): Promise<{ success: boolean; newPoints: number }> => {
+    // --- Custom Quest: reward based on MVU task data ---
+    if (id.startsWith('custom::')) {
+      const taskKey = id.slice('custom::'.length);
+      if (!taskKey) return { success: false, newPoints: currentPoints };
+
+      const tasks = await MvuBridge.getTasks();
+      if (!tasks) return { success: false, newPoints: currentPoints };
+      const taskState = (tasks as any)[taskKey];
+      if (!taskState || typeof taskState !== 'object' || taskState.已完成 !== true) {
+        return { success: false, newPoints: currentPoints };
+      }
+
+      const { store } = normalizeChatVariables(getVariables(CHAT_OPTION));
+      const meta = store.customQuests?.[id];
+      const reward =
+        meta?.rewardMcPoints ??
+        (() => {
+          const r = toFiniteNumber(taskState.奖励PT);
+          return r === null ? 0 : r;
+        })();
+      if (reward <= 0) return { success: false, newPoints: currentPoints };
+
+      const newPoints = currentPoints + reward;
+      await DataService.updateResources({ mcPoints: newPoints });
+      await updateStoreWith(s => ({
+        ...s,
+        quests: { ...s.quests, [id]: 'CLAIMED' },
+      }));
+      await MvuBridge.deleteTask(taskKey);
+      return { success: true, newPoints };
+    }
+
+    // --- Built-in Quest: use static QUEST_DATABASE definition ---
     const def = QUEST_DATABASE.find(q => q.id === id);
     if (!def) return { success: false, newPoints: currentPoints };
     if (def.name.includes('.')) return { success: false, newPoints: currentPoints };
@@ -1299,9 +1486,13 @@ export const DataService = {
         ? Math.max(1, Math.floor(store.nextCustomQuestId))
         : 1;
     const taskKey = `自定义任务${nextId}`;
+    const questId = `custom::${taskKey}`;
 
     try {
-      await MvuBridge.setTask(taskKey, { 名称: trimmedName, 完成条件: trimmedDesc, 已完成: false, 奖励PT: reward });
+      // 初始状态不写入布尔型“已完成”，只记录条件与奖励。
+      // 这样在任务列表中会显示为“可接取 (AVAILABLE)”，
+      // 直到玩家在列表中点击“接取”后才由 acceptQuest 写入 `已完成: false` 标记为进行中。
+      await MvuBridge.setTask(taskKey, { 名称: trimmedName, 完成条件: trimmedDesc, 奖励PT: reward });
     } catch (err) {
       console.warn('[HypnoOS] 自定义任务写入失败', err);
       return { success: false };
@@ -1311,6 +1502,19 @@ export const DataService = {
     await updateStoreWith(s => ({
       ...s,
       nextCustomQuestId: nextId + 1,
+      customQuests: {
+        ...(s.customQuests ?? {}),
+        [questId]: {
+          title: trimmedName,
+          description: trimmedDesc,
+          rewardMcPoints: reward,
+        },
+      },
+      // 初始状态视为“可接取”
+      quests: {
+        ...s.quests,
+        [questId]: 'AVAILABLE',
+      },
     }));
     return { success: true, user: nextUser };
   },
